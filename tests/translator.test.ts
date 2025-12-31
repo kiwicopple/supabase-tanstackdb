@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   translateWhereExpression,
+  translateWhereExpressionFull,
   translateLoadSubsetOptions,
+  where,
 } from '../src/translator.js'
 import { SupabaseCollectionError } from '../src/errors.js'
 import type { WhereExpression, LoadSubsetOptions } from '../src/types.js'
@@ -19,7 +21,7 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr)
 
       expect(result).toEqual([
-        { column: 'status', operator: 'eq', value: 'active' },
+        { column: 'status', operator: 'eq', value: 'active', negate: false },
       ])
     })
 
@@ -34,7 +36,7 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr)
 
       expect(result).toEqual([
-        { column: 'status', operator: 'neq', value: 'deleted' },
+        { column: 'status', operator: 'neq', value: 'deleted', negate: false },
       ])
     })
 
@@ -49,7 +51,7 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr)
 
       expect(result).toEqual([
-        { column: 'age', operator: 'gte', value: '18' },
+        { column: 'age', operator: 'gte', value: '18', negate: false },
       ])
     })
 
@@ -64,7 +66,7 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr)
 
       expect(result).toEqual([
-        { column: 'status', operator: 'in', value: '(active,pending)' },
+        { column: 'status', operator: 'in', value: '(active,pending)', negate: false },
       ])
     })
 
@@ -79,7 +81,7 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr)
 
       expect(result).toEqual([
-        { column: 'deleted_at', operator: 'is', value: 'null' },
+        { column: 'deleted_at', operator: 'is', value: 'null', negate: false },
       ])
     })
 
@@ -95,7 +97,37 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr, columnMap)
 
       expect(result).toEqual([
-        { column: 'user_name', operator: 'eq', value: 'john' },
+        { column: 'user_name', operator: 'eq', value: 'john', negate: false },
+      ])
+    })
+
+    it('translates like operator', () => {
+      const expr: WhereExpression = {
+        type: 'comparison',
+        field: 'name',
+        operator: 'like',
+        value: '%john%',
+      }
+
+      const result = translateWhereExpression(expr)
+
+      expect(result).toEqual([
+        { column: 'name', operator: 'like', value: '%john%', negate: false },
+      ])
+    })
+
+    it('translates ilike operator', () => {
+      const expr: WhereExpression = {
+        type: 'comparison',
+        field: 'name',
+        operator: 'ilike',
+        value: '%JOHN%',
+      }
+
+      const result = translateWhereExpression(expr)
+
+      expect(result).toEqual([
+        { column: 'name', operator: 'ilike', value: '%JOHN%', negate: false },
       ])
     })
   })
@@ -114,12 +146,12 @@ describe('translateWhereExpression', () => {
       const result = translateWhereExpression(expr)
 
       expect(result).toEqual([
-        { column: 'status', operator: 'eq', value: 'active' },
-        { column: 'age', operator: 'gte', value: '18' },
+        { column: 'status', operator: 'eq', value: 'active', negate: false },
+        { column: 'age', operator: 'gte', value: '18', negate: false },
       ])
     })
 
-    it('throws for OR expressions', () => {
+    it('translates OR expressions to orGroups', () => {
       const expr: WhereExpression = {
         type: 'logical',
         operator: 'or',
@@ -129,18 +161,84 @@ describe('translateWhereExpression', () => {
         ],
       }
 
-      expect(() => translateWhereExpression(expr)).toThrow(SupabaseCollectionError)
+      const result = translateWhereExpressionFull(expr)
+
+      expect(result.filters).toEqual([])
+      expect(result.orGroups).toEqual([
+        {
+          type: 'or',
+          filters: [
+            { column: 'status', operator: 'eq', value: 'active', negate: false },
+            { column: 'status', operator: 'eq', value: 'pending', negate: false },
+          ],
+        },
+      ])
     })
   })
 
   describe('NOT expressions', () => {
-    it('throws for NOT expressions', () => {
+    it('translates NOT comparison to negated filter', () => {
       const expr: WhereExpression = {
         type: 'not',
         expression: { type: 'comparison', field: 'status', operator: 'eq', value: 'active' },
       }
 
-      expect(() => translateWhereExpression(expr)).toThrow(SupabaseCollectionError)
+      const result = translateWhereExpression(expr)
+
+      expect(result).toEqual([
+        { column: 'status', operator: 'eq', value: 'active', negate: true },
+      ])
+    })
+
+    it('translates NOT (A OR B) to negated AND filters (De Morgan)', () => {
+      const expr: WhereExpression = {
+        type: 'not',
+        expression: {
+          type: 'logical',
+          operator: 'or',
+          expressions: [
+            { type: 'comparison', field: 'status', operator: 'eq', value: 'active' },
+            { type: 'comparison', field: 'status', operator: 'eq', value: 'pending' },
+          ],
+        },
+      }
+
+      const result = translateWhereExpressionFull(expr)
+
+      // NOT (A OR B) = NOT A AND NOT B
+      expect(result.filters).toEqual([
+        { column: 'status', operator: 'eq', value: 'active', negate: true },
+        { column: 'status', operator: 'eq', value: 'pending', negate: true },
+      ])
+      expect(result.orGroups).toEqual([])
+    })
+
+    it('translates NOT (A AND B) to negated OR group (De Morgan)', () => {
+      const expr: WhereExpression = {
+        type: 'not',
+        expression: {
+          type: 'logical',
+          operator: 'and',
+          expressions: [
+            { type: 'comparison', field: 'status', operator: 'eq', value: 'active' },
+            { type: 'comparison', field: 'age', operator: 'gte', value: 18 },
+          ],
+        },
+      }
+
+      const result = translateWhereExpressionFull(expr)
+
+      // NOT (A AND B) = NOT A OR NOT B
+      expect(result.filters).toEqual([])
+      expect(result.orGroups).toEqual([
+        {
+          type: 'or',
+          filters: [
+            { column: 'status', operator: 'eq', value: 'active', negate: true },
+            { column: 'age', operator: 'gte', value: '18', negate: true },
+          ],
+        },
+      ])
     })
   })
 
@@ -166,6 +264,26 @@ describe('translateWhereExpression', () => {
 
       expect(() => translateWhereExpression(expr)).toThrow(SupabaseCollectionError)
     })
+
+    it('throws for complex nested expressions in OR', () => {
+      const expr: WhereExpression = {
+        type: 'logical',
+        operator: 'or',
+        expressions: [
+          {
+            type: 'logical',
+            operator: 'and',
+            expressions: [
+              { type: 'comparison', field: 'a', operator: 'eq', value: 1 },
+              { type: 'comparison', field: 'b', operator: 'eq', value: 2 },
+            ],
+          },
+          { type: 'comparison', field: 'c', operator: 'eq', value: 3 },
+        ],
+      }
+
+      expect(() => translateWhereExpressionFull(expr)).toThrow(SupabaseCollectionError)
+    })
   })
 })
 
@@ -178,6 +296,7 @@ describe('translateLoadSubsetOptions', () => {
     expect(result).toEqual({
       select: '*',
       filters: [],
+      orGroups: [],
     })
   })
 
@@ -204,7 +323,33 @@ describe('translateLoadSubsetOptions', () => {
     const result = translateLoadSubsetOptions(options)
 
     expect(result.filters).toEqual([
-      { column: 'status', operator: 'eq', value: 'active' },
+      { column: 'status', operator: 'eq', value: 'active', negate: false },
+    ])
+  })
+
+  it('translates OR where clause to orGroups', () => {
+    const options: LoadSubsetOptions = {
+      where: {
+        type: 'logical',
+        operator: 'or',
+        expressions: [
+          { type: 'comparison', field: 'status', operator: 'eq', value: 'active' },
+          { type: 'comparison', field: 'status', operator: 'eq', value: 'pending' },
+        ],
+      },
+    }
+
+    const result = translateLoadSubsetOptions(options)
+
+    expect(result.filters).toEqual([])
+    expect(result.orGroups).toEqual([
+      {
+        type: 'or',
+        filters: [
+          { column: 'status', operator: 'eq', value: 'active', negate: false },
+          { column: 'status', operator: 'eq', value: 'pending', negate: false },
+        ],
+      },
     ])
   })
 
@@ -261,5 +406,114 @@ describe('translateLoadSubsetOptions', () => {
     const result = translateLoadSubsetOptions(options, { columnMap })
 
     expect(result.order).toBe('created_at.desc')
+  })
+})
+
+describe('where helper', () => {
+  it('creates eq expression', () => {
+    const expr = where.eq('status', 'active')
+
+    expect(expr).toEqual({
+      type: 'comparison',
+      field: 'status',
+      operator: 'eq',
+      value: 'active',
+    })
+  })
+
+  it('creates and expression', () => {
+    const expr = where.and(
+      where.eq('status', 'active'),
+      where.gte('age', 18)
+    )
+
+    expect(expr).toEqual({
+      type: 'logical',
+      operator: 'and',
+      expressions: [
+        { type: 'comparison', field: 'status', operator: 'eq', value: 'active' },
+        { type: 'comparison', field: 'age', operator: 'gte', value: 18 },
+      ],
+    })
+  })
+
+  it('creates or expression', () => {
+    const expr = where.or(
+      where.eq('status', 'active'),
+      where.eq('status', 'pending')
+    )
+
+    expect(expr).toEqual({
+      type: 'logical',
+      operator: 'or',
+      expressions: [
+        { type: 'comparison', field: 'status', operator: 'eq', value: 'active' },
+        { type: 'comparison', field: 'status', operator: 'eq', value: 'pending' },
+      ],
+    })
+  })
+
+  it('creates not expression', () => {
+    const expr = where.not(where.eq('status', 'deleted'))
+
+    expect(expr).toEqual({
+      type: 'not',
+      expression: { type: 'comparison', field: 'status', operator: 'eq', value: 'deleted' },
+    })
+  })
+
+  it('creates like expression', () => {
+    const expr = where.like('name', '%john%')
+
+    expect(expr).toEqual({
+      type: 'comparison',
+      field: 'name',
+      operator: 'like',
+      value: '%john%',
+    })
+  })
+
+  it('creates ilike expression', () => {
+    const expr = where.ilike('name', '%JOHN%')
+
+    expect(expr).toEqual({
+      type: 'comparison',
+      field: 'name',
+      operator: 'ilike',
+      value: '%JOHN%',
+    })
+  })
+
+  it('creates isNull expression', () => {
+    const expr = where.isNull('deleted_at')
+
+    expect(expr).toEqual({
+      type: 'comparison',
+      field: 'deleted_at',
+      operator: 'is',
+      value: null,
+    })
+  })
+
+  it('creates in expression', () => {
+    const expr = where.in('status', ['active', 'pending'])
+
+    expect(expr).toEqual({
+      type: 'comparison',
+      field: 'status',
+      operator: 'in',
+      value: ['active', 'pending'],
+    })
+  })
+
+  it('creates fts expression', () => {
+    const expr = where.fts('content', 'hello world')
+
+    expect(expr).toEqual({
+      type: 'comparison',
+      field: 'content',
+      operator: 'fts',
+      value: 'hello world',
+    })
   })
 })

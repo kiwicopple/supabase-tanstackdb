@@ -61,6 +61,15 @@ export {
 // Translator (for advanced use cases)
 export {
   translateWhereExpression,
+  translateWhereExpressionFull,
   translateLoadSubsetOptions,
   applyQueryToBuilder,
+  where,
 } from './translator.js'
+
+// Additional types
+export type { PostgRESTFilter, PostgRESTOrGroup, PostgRESTQuery, AuthConfig } from './types.js'
+
+// Auth utilities (for advanced use cases)
+export { AuthSessionManager, createAuthSessionManager, createAuthResetHandler } from './auth.js'
+export type { AuthChangeCallback, AuthResetOptions } from './auth.js'

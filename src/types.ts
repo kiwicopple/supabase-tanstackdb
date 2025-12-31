@@ -29,6 +29,18 @@ export interface RealtimeConfig {
 }
 
 /**
+ * Auth session handling configuration
+ */
+export interface AuthConfig {
+  /** Enable auth session monitoring (default: true) */
+  enabled?: boolean
+  /** Clear cache on session change (default: true) */
+  clearCacheOnChange?: boolean
+  /** Callback when session changes */
+  onSessionChange?: (hasSession: boolean) => void
+}
+
+/**
  * Mutation configuration
  */
 export interface MutationsConfig {
@@ -89,6 +101,10 @@ export interface SupabaseCollectionConfig<T> {
   /** Realtime subscription configuration */
   realtime?: RealtimeConfig
 
+  // Auth
+  /** Auth session handling configuration */
+  auth?: AuthConfig
+
   // Error handling / observability
   /** Error callback */
   onError?: (err: unknown, ctx: ErrorContext) => void
@@ -100,7 +116,31 @@ export interface SupabaseCollectionConfig<T> {
 // Expression Tree Types (for query translation)
 // ============================================
 
-export type ComparisonOperator = 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'ilike' | 'in' | 'is'
+export type ComparisonOperator =
+  | 'eq'
+  | 'neq'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'like'
+  | 'ilike'
+  | 'in'
+  | 'is'
+  | 'contains'
+  | 'containedBy'
+  | 'rangeGt'
+  | 'rangeGte'
+  | 'rangeLt'
+  | 'rangeLte'
+  | 'rangeAdjacent'
+  | 'overlaps'
+  | 'match'
+  | 'imatch'
+  | 'fts'
+  | 'plfts'
+  | 'phfts'
+  | 'wfts'
 
 export type LogicalOperator = 'and' | 'or'
 
@@ -203,11 +243,30 @@ export interface CollectionOptions<T> {
 // ============================================
 
 /**
+ * Single filter for PostgREST
+ */
+export interface PostgRESTFilter {
+  column: string
+  operator: string
+  value: string
+  negate?: boolean
+}
+
+/**
+ * OR group for PostgREST
+ */
+export interface PostgRESTOrGroup {
+  type: 'or'
+  filters: PostgRESTFilter[]
+}
+
+/**
  * Translated PostgREST query parameters
  */
 export interface PostgRESTQuery {
   select: string
-  filters: Array<{ column: string; operator: string; value: string }>
+  filters: PostgRESTFilter[]
+  orGroups?: PostgRESTOrGroup[]
   order?: string
   limit?: number
   offset?: number

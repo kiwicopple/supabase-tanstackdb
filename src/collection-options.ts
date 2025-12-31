@@ -8,6 +8,7 @@ import { SupabaseCollectionError } from './errors.js'
 import { translateLoadSubsetOptions, applyQueryToBuilder } from './translator.js'
 import { createMutationHandlers } from './mutations.js'
 import { createRealtimeManager, RealtimeManager } from './realtime.js'
+import { AuthSessionManager } from './auth.js'
 import {
   noopLogger,
   generateSubsetKey,
@@ -44,6 +45,7 @@ export function supabaseCollectionOptions<T>(
     defaultSelect = '*',
     defaultOrderBy,
     columnMap,
+    auth,
     onError,
     logger = noopLogger,
   } = config
@@ -53,6 +55,10 @@ export function supabaseCollectionOptions<T>(
 
   // Initialize realtime manager
   let realtimeManager: RealtimeManager<T> | null = null
+
+  // Initialize auth session manager
+  let authManager: AuthSessionManager | null = null
+  let authUnsubscribe: (() => void) | null = null
 
   // Create mutation handlers
   const mutations = createMutationHandlers(config)
@@ -102,7 +108,7 @@ export function supabaseCollectionOptions<T>(
         throw SupabaseCollectionError.postgrest(error.message, error)
       }
 
-      const rows = (data ?? []).map((row) =>
+      const rows = (data ?? []).map((row: unknown) =>
         mapColumnFromDb<T>(row as Record<string, unknown>, columnMap)
       )
 
@@ -184,11 +190,46 @@ export function supabaseCollectionOptions<T>(
    * Cleanup function for subscriptions
    */
   const cleanup = (): void => {
+    // Cleanup realtime
     if (realtimeManager) {
       realtimeManager.unsubscribe()
       realtimeManager = null
     }
+
+    // Cleanup auth
+    if (authUnsubscribe) {
+      authUnsubscribe()
+      authUnsubscribe = null
+    }
+    if (authManager) {
+      authManager.stop()
+      authManager = null
+    }
+
+    // Clear cache
     subsetCache.clear()
+  }
+
+  // Set up auth session handling
+  const authEnabled = auth?.enabled !== false // Default to true
+  if (authEnabled) {
+    authManager = new AuthSessionManager(supabase, logger)
+
+    authUnsubscribe = authManager.onAuthChange((_event, session) => {
+      const hasSession = session !== null
+      logger.debug('Auth session changed:', { table, hasSession })
+
+      // Clear cache on session change to prevent cross-user data leakage
+      if (auth?.clearCacheOnChange !== false) {
+        subsetCache.clear()
+        logger.debug('Cache cleared due to auth change')
+      }
+
+      // Call optional callback
+      auth?.onSessionChange?.(hasSession)
+    })
+
+    authManager.start()
   }
 
   // Set up realtime if enabled
